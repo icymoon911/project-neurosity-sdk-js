@@ -6,6 +6,7 @@ import { FirebaseApp, FirebaseUser, FirebaseDevice } from "./firebase";
 import { UserWithMetadata } from "./firebase";
 import { Timesync } from "../timesync";
 import { SubscriptionManager } from "../subscriptions/SubscriptionManager";
+import { EventBus } from "../utils/EventBus";
 import { heartbeatAwareStatus } from "../utils/heartbeat";
 import { filterInternalKeys } from "../utils/filterInternalKeys";
 import { Client } from "../types/client";
@@ -35,6 +36,7 @@ import {
 export class CloudClient implements Client {
   public user;
   public userClaims;
+  public eventBus: EventBus | null = null;
   protected options: SDKOptions;
   protected firebaseApp: FirebaseApp;
   protected firebaseUser: FirebaseUser;
@@ -67,6 +69,7 @@ export class CloudClient implements Client {
 
     this.firebaseUser.onAuthStateChanged().subscribe((user) => {
       this.user = user;
+      this.eventBus?.emit("authStateChange", { user });
     });
 
     this.firebaseUser.onUserClaimsChange().subscribe((userClaims) => {
@@ -74,6 +77,9 @@ export class CloudClient implements Client {
     });
 
     this.onDeviceChange().subscribe((device) => {
+      // Emit deviceChange event via the event bus (additional to the Observable).
+      this.eventBus?.emit("deviceChange", device);
+
       // Must stay synchronous. Subscribers delivered on the same
       // `_selectedDevice` emission — e.g. `observeNamespace(...)`'s
       // switchMap inner, which reads `this.firebaseDevice` to wire up
@@ -160,6 +166,8 @@ export class CloudClient implements Client {
   }
 
   public async disconnect(): Promise<any> {
+    this.eventBus?.emit("disconnect");
+
     if (this.firebaseDevice) {
       try {
         await this.firebaseDevice.disconnect();
@@ -196,6 +204,8 @@ export class CloudClient implements Client {
     if (!userClaimsReady) {
       return Promise.reject(`Failed to get user claims.`);
     }
+
+    this.eventBus?.emit("connect", { user: this.user, selectedDevice });
 
     return {
       ...auth,

@@ -1,6 +1,7 @@
 export * from "./Neurosity";
 export * from "./api/bluetooth";
 export * from "./types";
+export type { SDKEventType, SDKEventHandler } from "./utils/EventBus";
 
 // Re-export the firebase modular APIs that the SDK already bundles. Consumers
 // that build on top of the SDK should import firebase functions through these

@@ -1,6 +1,7 @@
 export * from "./accelerometer";
 export * from "./actions";
 export * from "./awareness";
+export * from "./batchSubscribe";
 export * from "./brainwaves";
 export * from "./calm";
 export * from "./client";

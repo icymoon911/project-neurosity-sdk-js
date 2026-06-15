@@ -50,6 +50,12 @@ import {
   CreateApiKeyRequest,
   RemoveApiKeyResponse
 } from "./types/apiKey";
+import { EventBus, SDKEventType, SDKEventHandler } from "./utils/EventBus";
+import {
+  BatchMetricName,
+  BatchMetricEmission
+} from "./types/batchSubscribe";
+import { getBatchCloudMetrics } from "./utils/batchSubscribe";
 
 const defaultOptions = {
   timesync: false,
@@ -98,6 +104,11 @@ export class Neurosity {
   /**
    * @hidden
    */
+  protected eventBus: EventBus;
+
+  /**
+   * @hidden
+   */
   private streamingMode$ = new ReplaySubject<STREAMING_MODE>(1);
 
   /**
@@ -125,7 +136,9 @@ export class Neurosity {
       ...options
     });
 
+    this.eventBus = new EventBus();
     this.cloudClient = new CloudClient(this.options);
+    this.cloudClient.eventBus = this.eventBus;
 
     if (!!bluetoothTransport) {
       this.bluetoothClient = new BluetoothClient({
@@ -410,6 +423,65 @@ export class Neurosity {
    */
   public onAuthStateChanged(): Observable<any> {
     return this.cloudClient.onAuthStateChanged();
+  }
+
+  /**
+   * Register a handler for SDK lifecycle events.
+   *
+   * Supported events: `connect`, `disconnect`, `deviceChange`, `authStateChange`.
+   *
+   * ```typescript
+   * const handler = (info) => console.log("connected", info);
+   * neurosity.on("connect", handler);
+   *
+   * // later...
+   * neurosity.off("connect", handler);
+   * ```
+   *
+   * @param event Event name
+   * @param handler Callback invoked when the event fires
+   */
+  public on(event: SDKEventType, handler: SDKEventHandler): void {
+    this.eventBus.on(event, handler);
+  }
+
+  /**
+   * Remove a previously registered event handler.
+   *
+   * @param event Event name
+   * @param handler The same function reference passed to `on()`
+   */
+  public off(event: SDKEventType, handler: SDKEventHandler): void {
+    this.eventBus.off(event, handler);
+  }
+
+  /**
+   * Subscribe to multiple metrics at once. Returns a single Observable
+   * that emits a `BatchMetricEmission` each time any of the requested
+   * metrics produces new data. All metrics share the same device online
+   * status source, so they all go offline/online together.
+   *
+   * ```typescript
+   * const sub = neurosity.subscribe([
+   *   "brainwaves.raw",
+   *   "calm",
+   *   "focus",
+   *   "signalQuality"
+   * ]).subscribe((emission) => {
+   *   console.log(emission.metric, emission.label, emission.data);
+   * });
+   *
+   * // later...
+   * sub.unsubscribe(); // cleans up all RTDB listeners
+   * ```
+   *
+   * @param metricNames Array of metric names to subscribe to
+   * @returns Observable of `BatchMetricEmission`
+   */
+  public subscribe(
+    metricNames: BatchMetricName[]
+  ): Observable<BatchMetricEmission> {
+    return getBatchCloudMetrics(this._getCloudMetricDependencies(), metricNames);
   }
 
   /**

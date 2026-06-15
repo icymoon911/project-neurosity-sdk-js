@@ -1,4 +1,5 @@
 export * as errors from "./errors";
+export * from "./EventBus";
 export * from "./filterInternalKeys";
 export * as hapticEffects from "./hapticEffects";
 export * from "./heartbeat";

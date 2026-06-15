@@ -15,9 +15,12 @@ type ApiKeyClaims = {
 
 type PermissionBasedClaims = OAuthClaims & ApiKeyClaims;
 
-const scopeRequiredByAction = {
+const scopeRequiredByAction: Record<string, string> = {
   "marker/add": "write:brainwave-markers",
   "brainwaves/record": "write:brainwaves",
+  "brainwaves/startRecording": "write:brainwaves",
+  "brainwaves/stopRecording": "write:brainwaves",
+  "brainwaves/cancelRecording": "write:brainwaves",
   "haptics/queue": "write:haptics",
   "training/record": "write:kinesis",
   "training/stop": "write:kinesis",
@@ -25,7 +28,7 @@ const scopeRequiredByAction = {
   "wifi/reset": "write:wifi-settings"
 };
 
-const scopeRequiredByFunctionName = {
+const scopeRequiredByFunctionName: Record<string, string> = {
   //metrics
   accelerometer: "read:accelerometer",
   brainwaves: "read:brainwaves",
@@ -34,6 +37,7 @@ const scopeRequiredByFunctionName = {
   kinesis: "read:kinesis",
   predictions: "read:kinesis",
   signalQuality: "read:signal-quality",
+  signalQualityV2: "read:signal-quality",
   // end of metrics
   // device info
   getInfo: "read:devices-info",
@@ -55,6 +59,19 @@ const scopeRequiredByFunctionName = {
   createCustomToken: "write:api-keys"
 };
 
+/**
+ * Safely parse scopes from a scopes string.
+ * Returns an empty array when the scopes field is missing, null, undefined,
+ * or not a string — this prevents the SDK from crashing and instead results
+ * in a "missing scope" error downstream.
+ */
+function parseScopes(scopesString: unknown): string[] {
+  if (typeof scopesString !== "string" || scopesString.length === 0) {
+    return [];
+  }
+  return scopesString.split(",");
+}
+
 export function validateScopeBasedPermissionForAction(
   userClaims: PermissionBasedClaims,
   action: Action
@@ -65,10 +82,16 @@ export function validateScopeBasedPermissionForAction(
     return [false, null];
   }
 
-  const scopes = scopesString.split(",");
-
   const { command, action: actionName } = action;
   const requiredScope = scopeRequiredByAction[`${command}/${actionName}`];
+
+  // If no scope is mapped for this action, allow it — we don't want to
+  // block OAuth/API-key users for actions we haven't explicitly mapped.
+  if (!requiredScope) {
+    return [false, null];
+  }
+
+  const scopes = parseScopes(scopesString);
   const hasRequireScopes = scopes.includes(requiredScope);
 
   if (hasRequireScopes) {
@@ -88,9 +111,14 @@ export function validateScopeBasedPermissionForFunctionName(
     return [false, null];
   }
 
-  const scopes = scopesString.split(",");
-
   const requiredScope = scopeRequiredByFunctionName[functionName];
+
+  // If no scope is mapped for this function, allow it.
+  if (!requiredScope) {
+    return [false, null];
+  }
+
+  const scopes = parseScopes(scopesString);
   const hasRequireScopes = scopes.includes(requiredScope);
 
   if (hasRequireScopes) {

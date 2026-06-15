@@ -55,6 +55,7 @@ const defaultOptions = {
   timesync: false,
   autoSelectDevice: true,
   streamingMode: STREAMING_MODE.WIFI_ONLY,
+  userClaimsTimeout: 5000,
   emulator: false,
   emulatorHost: "localhost",
   emulatorAuthPort: 9099,
@@ -1413,10 +1414,20 @@ export class Neurosity {
       return throwError(() => OAuthError);
     }
 
-    return getCloudMetric(this._getCloudMetricDependencies(), {
-      metric,
-      labels: label ? [label] : [],
-      atomic: false
+    return this._withStreamingModeObservable({
+      wifi: () =>
+        getCloudMetric(this._getCloudMetricDependencies(), {
+          metric,
+          labels: label ? [label] : [],
+          atomic: false
+        }),
+      bluetooth: () =>
+        throwError(
+          () =>
+            new Error(
+              `${errors.prefix}kinesis is only supported in WiFi mode. Please switch to a WiFi streaming mode to use this metric.`
+            )
+        )
     });
   }
 
@@ -1439,10 +1450,20 @@ export class Neurosity {
       return throwError(() => OAuthError);
     }
 
-    return getCloudMetric(this._getCloudMetricDependencies(), {
-      metric,
-      labels: label ? [label] : [],
-      atomic: false
+    return this._withStreamingModeObservable({
+      wifi: () =>
+        getCloudMetric(this._getCloudMetricDependencies(), {
+          metric,
+          labels: label ? [label] : [],
+          atomic: false
+        }),
+      bluetooth: () =>
+        throwError(
+          () =>
+            new Error(
+              `${errors.prefix}predictions is only supported in WiFi mode. Please switch to a WiFi streaming mode to use this metric.`
+            )
+        )
     });
   }
 

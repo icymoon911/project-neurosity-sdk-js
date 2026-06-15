@@ -10,6 +10,12 @@ export interface SDKOptions {
   bluetoothTransport?: BluetoothTransport;
   streamingMode?: STREAMING_MODE;
   /**
+   * Timeout in milliseconds to wait for user claims during login.
+   * Defaults to 5000ms (5 seconds). Increase this value for slow or
+   * high-latency network environments.
+   */
+  userClaimsTimeout?: number;
+  /**
    * @hidden
    */
   emulator?: boolean;

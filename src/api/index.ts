@@ -1,4 +1,4 @@
-import { Observable, ReplaySubject, EMPTY, timer } from "rxjs";
+import { Observable, ReplaySubject, EMPTY, timer, race } from "rxjs";
 import { fromEventPattern, firstValueFrom } from "rxjs";
 import { filter, shareReplay, switchMap, map, takeUntil } from "rxjs/operators";
 
@@ -183,18 +183,34 @@ export class CloudClient implements Client {
     const auth = await this.firebaseUser.login(credentials);
     const selectedDevice = await this.setAutoSelectedDevice();
 
+    const timeout = this.options.userClaimsTimeout ?? 5000;
+
     // We need guarantee that user claims are ready before finishing the
-    // login process as permission-based validation is dependent on the user claims
-    const userClaimsReady = await firstValueFrom(
-      this.firebaseUser.onUserClaimsChange().pipe(
-        filter((userClaims) => !!userClaims),
-        map((userClaims) => !!userClaims),
-        takeUntil(timer(1000))
+    // login process as permission-based validation is dependent on the user claims.
+    // Use race() with a sentinel to distinguish timeout from empty claims.
+    const TIMEOUT_SENTINEL = { timedOut: true };
+
+    const result = await firstValueFrom(
+      race(
+        this.firebaseUser.onUserClaimsChange().pipe(
+          filter((userClaims) => !!userClaims),
+          map((userClaims) => ({ timedOut: false, claims: userClaims }))
+        ),
+        timer(timeout).pipe(map(() => TIMEOUT_SENTINEL))
       )
     );
 
-    if (!userClaimsReady) {
-      return Promise.reject(`Failed to get user claims.`);
+    if (result.timedOut) {
+      return Promise.reject(
+        `Failed to get user claims: timed out after ${timeout}ms. ` +
+          `Consider increasing the userClaimsTimeout option.`
+      );
+    }
+
+    if (!result.claims) {
+      return Promise.reject(
+        `Failed to get user claims: user claims are empty or unavailable.`
+      );
     }
 
     return {

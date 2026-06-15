@@ -6,6 +6,8 @@ import { FirebaseApp, FirebaseUser, FirebaseDevice } from "./firebase";
 import { UserWithMetadata } from "./firebase";
 import { Timesync } from "../timesync";
 import { SubscriptionManager } from "../subscriptions/SubscriptionManager";
+import { EventBus } from "../utils/EventBus";
+import { SDKEventMap } from "../types/events";
 import { heartbeatAwareStatus } from "../utils/heartbeat";
 import { filterInternalKeys } from "../utils/filterInternalKeys";
 import { Client } from "../types/client";
@@ -48,6 +50,19 @@ export class CloudClient implements Client {
    * @internal
    */
   private _selectedDevice = new ReplaySubject<DeviceInfo | null | undefined>(1);
+
+  /**
+   * @internal
+   * Event bus for emitting SDK lifecycle events. Set by the Neurosity
+   * wrapper via `setEventBus()`. Not user-facing.
+   */
+  private _eventBus: EventBus<SDKEventMap> | null = null;
+
+  /**
+   * @internal
+   * Track the previously selected device to emit `deviceChange` diffs.
+   */
+  private _previousDevice: DeviceInfo | null = null;
 
   constructor(options: SDKOptions) {
     this.options = options;
@@ -93,6 +108,17 @@ export class CloudClient implements Client {
         });
       }
 
+      // Emit deviceChange event on the event bus (non-blocking, extra
+      // notification mechanism — does NOT alter the existing
+      // onDeviceChange() Observable behavior).
+      if (this._eventBus) {
+        this._eventBus.emit("deviceChange", {
+          previousDevice: this._previousDevice,
+          currentDevice: device ?? null
+        });
+      }
+      this._previousDevice = device ?? null;
+
       if (!device) {
         this.firebaseDevice = undefined;
         return;
@@ -119,6 +145,15 @@ export class CloudClient implements Client {
     return this._selectedDevice
       .asObservable()
       .pipe(filter((value) => value !== undefined));
+  }
+
+  /**
+   * @internal
+   * Attach an event bus to the CloudClient. The Neurosity wrapper
+   * calls this during construction to receive lifecycle events.
+   */
+  public setEventBus(eventBus: EventBus<SDKEventMap>): void {
+    this._eventBus = eventBus;
   }
 
   public osVersion(): Observable<OSVersion> {
@@ -160,12 +195,21 @@ export class CloudClient implements Client {
   }
 
   public async disconnect(): Promise<any> {
+    const deviceId = this._previousDevice?.deviceId;
+
     if (this.firebaseDevice) {
       try {
         await this.firebaseDevice.disconnect();
       } catch (error) {
         console.error("Error disconnecting from device", error);
       }
+    }
+
+    if (this._eventBus) {
+      this._eventBus.emit("disconnect", {
+        deviceId,
+        reason: "manual"
+      });
     }
 
     return this.firebaseApp.disconnect();
@@ -197,6 +241,19 @@ export class CloudClient implements Client {
       return Promise.reject(`Failed to get user claims.`);
     }
 
+    if (this._eventBus) {
+      this._eventBus.emit("authStateChange", {
+        user: this.user,
+        type: "login"
+      });
+
+      if (selectedDevice) {
+        this._eventBus.emit("connect", {
+          deviceId: selectedDevice.deviceId
+        });
+      }
+    }
+
     return {
       ...auth,
       selectedDevice
@@ -204,6 +261,8 @@ export class CloudClient implements Client {
   }
 
   public async logout(): Promise<any> {
+    const deviceId = this._previousDevice?.deviceId;
+
     if (this.firebaseDevice) {
       try {
         await this.firebaseDevice.disconnect();
@@ -212,7 +271,20 @@ export class CloudClient implements Client {
       }
     }
 
-    return await this.firebaseUser.logout();
+    const result = await this.firebaseUser.logout();
+
+    if (this._eventBus) {
+      this._eventBus.emit("authStateChange", {
+        user: null,
+        type: "logout"
+      });
+      this._eventBus.emit("disconnect", {
+        deviceId,
+        reason: "logout"
+      });
+    }
+
+    return result;
   }
 
   public onAuthStateChanged() {

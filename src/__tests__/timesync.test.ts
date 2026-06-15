@@ -13,6 +13,8 @@ jest.mock("../api", () => {
       this.options = options;
     }
 
+    setEventBus = jest.fn();
+
     getTimesyncOffset = jest.fn().mockImplementation(() => {
       return 150; // Mock 150ms offset
     });

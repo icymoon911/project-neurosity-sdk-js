@@ -29,6 +29,7 @@ jest.mock("../api", () => {
       this.options = options;
     }
 
+    setEventBus = jest.fn();
     login = jest.fn().mockImplementation(async (credentials) => {
       if (credentials.email === "invalid@example.com") {
         throw new Error("Invalid credentials");

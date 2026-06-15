@@ -13,6 +13,7 @@ jest.mock("../api/index", () => {
   let subscriptionId = 0;
 
   const mockCloudClient = {
+    setEventBus: jest.fn(),
     login: jest.fn(),
     logout: jest.fn(),
     onAuthStateChanged: jest.fn(),

@@ -1,4 +1,4 @@
-import { combineLatest, Observable, of, throwError } from "rxjs";
+import { combineLatest, Observable, of, throwError, merge } from "rxjs";
 import { ReplaySubject, firstValueFrom } from "rxjs";
 import { map, startWith, switchMap } from "rxjs/operators";
 import { distinctUntilChanged } from "rxjs/operators";
@@ -50,6 +50,14 @@ import {
   CreateApiKeyRequest,
   RemoveApiKeyResponse
 } from "./types/apiKey";
+import { EventBus } from "./utils/EventBus";
+import { parseMetricSpec } from "./utils/parseMetricSpec";
+import {
+  SDKEventMap,
+  SDKEventName,
+  SDKEventHandler
+} from "./types/events";
+import { MetricSpec, MetricEmission } from "./types/subscribe";
 
 const defaultOptions = {
   timesync: false,
@@ -101,6 +109,12 @@ export class Neurosity {
   private streamingMode$ = new ReplaySubject<STREAMING_MODE>(1);
 
   /**
+   * @hidden
+   * Internal event bus for SDK lifecycle events. Exposed via `on()` / `off()`.
+   */
+  private eventBus = new EventBus<SDKEventMap>();
+
+  /**
    *
    * @hidden
    */
@@ -126,6 +140,9 @@ export class Neurosity {
     });
 
     this.cloudClient = new CloudClient(this.options);
+
+    // Wire up the event bus so CloudClient can emit lifecycle events
+    this.cloudClient.setEventBus(this.eventBus);
 
     if (!!bluetoothTransport) {
       this.bluetoothClient = new BluetoothClient({
@@ -358,6 +375,160 @@ export class Neurosity {
       onDeviceChange: this.onDeviceChange.bind(this),
       status: this.status.bind(this)
     };
+  }
+
+  /**
+   * Register a handler for SDK lifecycle events.
+   *
+   * Supported events: `connect`, `disconnect`, `deviceChange`, `authStateChange`.
+   *
+   * ```typescript
+   * neurosity.on("connect", (event) => {
+   *   console.log("Connected to device:", event.deviceId);
+   * });
+   *
+   * neurosity.on("deviceChange", (event) => {
+   *   console.log("Device changed:", event.previousDevice, event.currentDevice);
+   * });
+   * ```
+   *
+   * @param event Event name
+   * @param handler Handler function
+   */
+  public on<T extends SDKEventName>(
+    event: T,
+    handler: SDKEventHandler<T>
+  ): void {
+    this.eventBus.on(event, handler);
+  }
+
+  /**
+   * Remove a previously registered event handler.
+   *
+   * ```typescript
+   * const onConnect = (event) => console.log(event);
+   * neurosity.on("connect", onConnect);
+   * // later...
+   * neurosity.off("connect", onConnect);
+   * ```
+   *
+   * @param event Event name
+   * @param handler Handler function to remove
+   */
+  public off<T extends SDKEventName>(
+    event: T,
+    handler: SDKEventHandler<T>
+  ): void {
+    this.eventBus.off(event, handler);
+  }
+
+  /**
+   * Subscribe to multiple metrics at once, returning a single unified
+   * Observable. Each emission contains the latest data for one of the
+   * subscribed metrics, tagged with the metric name, label, and timestamp.
+   *
+   * All metrics share the same device online status source — when the
+   * device goes offline, all metric streams stop emitting simultaneously,
+   * preventing inconsistent state across metrics.
+   *
+   * Unsubscribing from the returned Observable tears down all internal
+   * RTDB listeners for every metric in the batch.
+   *
+   * ```typescript
+   * neurosity.subscribe([
+   *   "brainwaves.raw",
+   *   "calm",
+   *   "focus",
+   *   "signalQuality"
+   * ]).subscribe((emission) => {
+   *   console.log(emission.metric);    // e.g. "calm"
+   *   console.log(emission.label);     // e.g. "calm"
+   *   console.log(emission.data);      // metric payload
+   *   console.log(emission.timestamp); // client-side timestamp
+   * });
+   * ```
+   *
+   * Supported metric specs:
+   * - `"accelerometer"` — all accelerometer labels (atomic)
+   * - `"brainwaves.raw"`, `"brainwaves.psd"`, `"brainwaves.powerByBand"`, `"brainwaves.rawUnfiltered"`
+   * - `"calm"` — alias for awareness/calm
+   * - `"focus"` — alias for awareness/focus
+   * - `"signalQuality"` — all signal quality labels (atomic)
+   * - `"signalQualityV2"` — all signal quality v2 labels (atomic)
+   * - `"kinesis.<label>"`, `"predictions.<label>"`
+   *
+   * @param metrics Array of metric spec strings
+   * @returns Observable that emits MetricEmission objects
+   */
+  public subscribe(metrics: MetricSpec[]): Observable<MetricEmission> {
+    if (!Array.isArray(metrics) || metrics.length === 0) {
+      return throwError(
+        () =>
+          new Error(
+            `${errors.prefix}At least one metric spec is required for subscribe().`
+          )
+      );
+    }
+
+    // Validate OAuth permissions for all requested metrics up front.
+    // Map each spec to the function name used in the permissions table.
+    const permissionFunctionNameByMetric: Record<string, string> = {
+      accelerometer: "accelerometer",
+      brainwaves: "brainwaves",
+      calm: "calm",
+      focus: "focus",
+      kinesis: "kinesis",
+      predictions: "predictions",
+      signalQuality: "signalQuality",
+      signalQualityV2: "signalQuality"
+    };
+
+    for (const spec of metrics) {
+      const parsed = parseMetricSpec(spec);
+      const permKey = parsed.metric === "awareness"
+        ? spec // "calm" or "focus" aliases map directly
+        : parsed.metric;
+      const functionName = permissionFunctionNameByMetric[permKey];
+
+      if (functionName) {
+        const [hasOAuthError, OAuthError] =
+          validateScopeBasedPermissionForFunctionName(
+            this.cloudClient.userClaims,
+            functionName
+          );
+
+        if (hasOAuthError) {
+          return throwError(() => OAuthError);
+        }
+      }
+    }
+
+    const deps = this._getCloudMetricDependencies();
+
+    // All metrics share the same `status()` Observable (which is
+    // `shareReplay(1)` in CloudClient), so `whileOnline` inside each
+    // `getCloudMetric` call reads the SAME replayed status. When the
+    // device goes offline, every metric in the batch stops emitting on
+    // the same status transition — no inconsistent state across metrics.
+    const streams = metrics.map((spec) => {
+      const parsed = parseMetricSpec(spec);
+      const label = parsed.labels.join(",");
+
+      return getCloudMetric(deps, {
+        metric: parsed.metric,
+        labels: parsed.labels,
+        atomic: parsed.atomic
+      }).pipe(
+        map((data) => ({
+          metric: spec,
+          label,
+          data,
+          timestamp: Date.now()
+        }))
+      );
+    });
+
+    return merge(...streams);
   }
 
   /**

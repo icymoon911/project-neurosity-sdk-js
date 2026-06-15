@@ -51,6 +51,7 @@ jest.mock("../api", () => {
       this._selectedDevice.next(this._deviceInfo);
     }
 
+    setEventBus = jest.fn();
     getInfo = jest.fn().mockResolvedValue(this._deviceInfo);
 
     selectDevice = jest

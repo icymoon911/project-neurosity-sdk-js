@@ -68,6 +68,7 @@ jest.mock("../api", () => {
       this._selectedDevice.next(undefined);
     }
 
+    setEventBus = jest.fn();
     login = jest.fn().mockResolvedValue({});
     logout = jest.fn().mockResolvedValue({});
     getInfo = jest.fn().mockResolvedValue({});

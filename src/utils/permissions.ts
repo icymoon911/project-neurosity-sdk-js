@@ -1,3 +1,4 @@
+import { Observable, throwError } from "rxjs";
 import * as errors from "../utils/errors";
 import { Action } from "../types/actions";
 
@@ -13,7 +14,7 @@ type ApiKeyClaims = {
   scopes?: string;
 };
 
-type PermissionBasedClaims = OAuthClaims & ApiKeyClaims;
+export type PermissionBasedClaims = OAuthClaims & ApiKeyClaims;
 
 const scopeRequiredByAction = {
   "marker/add": "write:brainwave-markers",
@@ -34,6 +35,7 @@ const scopeRequiredByFunctionName = {
   kinesis: "read:kinesis",
   predictions: "read:kinesis",
   signalQuality: "read:signal-quality",
+  signalQualityV2: "read:signal-quality",
   // end of metrics
   // device info
   getInfo: "read:devices-info",
@@ -98,6 +100,49 @@ export function validateScopeBasedPermissionForFunctionName(
   }
 
   return [true, getScopeError(requiredScope)];
+}
+
+/**
+ * Unified permission check wrapper that auto-detects whether the wrapped
+ * function returns an Observable or a Promise, and returns the appropriate
+ * error type (throwError for Observable, Promise.reject for Promise) when
+ * permission is denied.
+ *
+ * The function `fn` is always called exactly once. In the rare case where
+ * permission is denied and `fn` returns a Promise, the Promise's underlying
+ * operation may still execute but its result is discarded — server-side
+ * authorization provides a safety net in that scenario.
+ */
+export function withPermissionCheck<T>(
+  fn: () => Observable<T>,
+  userClaims: PermissionBasedClaims,
+  functionName: string
+): Observable<T>;
+export function withPermissionCheck<T>(
+  fn: () => Promise<T>,
+  userClaims: PermissionBasedClaims,
+  functionName: string
+): Promise<T>;
+export function withPermissionCheck(
+  fn: () => any,
+  userClaims: PermissionBasedClaims,
+  functionName: string
+): any {
+  const [hasError, error] = validateScopeBasedPermissionForFunctionName(
+    userClaims,
+    functionName
+  );
+
+  if (!hasError) {
+    return fn();
+  }
+
+  // Permission denied — probe fn() to detect the return type
+  const probe = fn();
+  if (probe && typeof probe.subscribe === "function") {
+    return throwError(() => error);
+  }
+  return Promise.reject(error);
 }
 
 function getScopeError(...requiredScopes: string[]): Error {

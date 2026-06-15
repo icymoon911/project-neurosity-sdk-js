@@ -1,4 +1,4 @@
-import { combineLatest, Observable, of, throwError } from "rxjs";
+import { combineLatest, Observable, of } from "rxjs";
 import { ReplaySubject, firstValueFrom } from "rxjs";
 import { map, startWith, switchMap } from "rxjs/operators";
 import { distinctUntilChanged } from "rxjs/operators";
@@ -14,6 +14,7 @@ import { Settings } from "./types/settings";
 import { SignalQuality } from "./types/signalQuality";
 import { SignalQualityV2 } from "./types/signalQualityV2";
 import { Kinesis } from "./types/kinesis";
+import { Prediction } from "./types/predictions";
 import { Calm } from "./types/calm";
 import { Focus } from "./types/focus";
 import { getLabels } from "./utils/subscription";
@@ -23,6 +24,7 @@ import { DeviceInfo, OSVersion } from "./types/deviceInfo";
 import { DeviceStatus, STATUS } from "./types/status";
 import { Action } from "./types/actions";
 import { HapticEffects } from "./types/hapticEffects";
+import { HapticEffectsRequest, HapticResponse } from "./types/haptics";
 import {
   RecordingOptions,
   RecordingResult,
@@ -32,15 +34,16 @@ import {
 import * as errors from "./utils/errors";
 import * as platform from "./utils/platform";
 import * as hapticEffects from "./utils/hapticEffects";
-import { validateScopeBasedPermissionForFunctionName } from "./utils/permissions";
-import { validateScopeBasedPermissionForAction } from "./utils/permissions";
+import {
+  validateScopeBasedPermissionForAction,
+  withPermissionCheck
+} from "./utils/permissions";
 import { createOAuthURL } from "./api/https/createOAuthURL";
 import { getOAuthToken } from "./api/https/getOAuthToken";
 import { OAuthConfig, OAuthQuery } from "./types/oauth";
 import { OAuthQueryResult, OAuthRemoveResponse } from "./types/oauth";
 import { UserClaims } from "./types/user";
 import { isNode } from "./utils/is-node";
-import { getCloudMetric } from "./utils/metrics";
 import { Experiment } from "./types/experiment";
 import { TransferDeviceOptions } from "./utils/transferDevice";
 import { BluetoothClient, osHasBluetoothSupport } from "./api/bluetooth";
@@ -50,6 +53,10 @@ import {
   CreateApiKeyRequest,
   RemoveApiKeyResponse
 } from "./types/apiKey";
+import {
+  createMetricObservable,
+  createAccelerometerObservable
+} from "./metrics/createMetricObservable";
 
 const defaultOptions = {
   timesync: false,
@@ -78,17 +85,17 @@ export class Neurosity {
   /**
    * @hidden
    */
-  protected options: SDKOptions;
+  public options: SDKOptions;
 
   /**
    * @hidden
    */
-  protected cloudClient: CloudClient;
+  public cloudClient: CloudClient;
 
   /**
    * @hidden
    */
-  protected bluetoothClient: BluetoothClient;
+  public bluetoothClient: BluetoothClient;
 
   /**
    * @hidden
@@ -99,6 +106,15 @@ export class Neurosity {
    * @hidden
    */
   private streamingMode$ = new ReplaySubject<STREAMING_MODE>(1);
+
+  /**
+   * Exposes current user claims for permission checks.
+   * Used by the metric factory to validate scope-based permissions.
+   * @hidden
+   */
+  get userClaims(): any {
+    return this.cloudClient.userClaims;
+  }
 
   /**
    *
@@ -351,7 +367,10 @@ export class Neurosity {
    *
    * @hidden
    */
-  private _getCloudMetricDependencies() {
+  /**
+   * @hidden
+   */
+  public _getCloudMetricDependencies() {
     return {
       options: this.options,
       cloudClient: this.cloudClient,
@@ -420,17 +439,11 @@ export class Neurosity {
    * ```
    */
   public addDevice(deviceId: string): Promise<void> {
-    const [hasOAuthError, OAuthError] =
-      validateScopeBasedPermissionForFunctionName(
-        this.cloudClient.userClaims,
-        "addDevice"
-      );
-
-    if (hasOAuthError) {
-      return Promise.reject(OAuthError);
-    }
-
-    return this.cloudClient.addDevice(deviceId);
+    return withPermissionCheck(
+      () => this.cloudClient.addDevice(deviceId),
+      this.cloudClient.userClaims,
+      "addDevice"
+    );
   }
 
   /**
@@ -441,17 +454,11 @@ export class Neurosity {
    * ```
    */
   public removeDevice(deviceId: string): Promise<void> {
-    const [hasOAuthError, OAuthError] =
-      validateScopeBasedPermissionForFunctionName(
-        this.cloudClient.userClaims,
-        "removeDevice"
-      );
-
-    if (hasOAuthError) {
-      return Promise.reject(OAuthError);
-    }
-
-    return this.cloudClient.removeDevice(deviceId);
+    return withPermissionCheck(
+      () => this.cloudClient.removeDevice(deviceId),
+      this.cloudClient.userClaims,
+      "removeDevice"
+    );
   }
 
   /**
@@ -465,17 +472,11 @@ export class Neurosity {
    * ```
    */
   public transferDevice(options: TransferDeviceOptions): Promise<void> {
-    const [hasOAuthError, OAuthError] =
-      validateScopeBasedPermissionForFunctionName(
-        this.cloudClient.userClaims,
-        "transferDevice"
-      );
-
-    if (hasOAuthError) {
-      return Promise.reject(OAuthError);
-    }
-
-    return this.cloudClient.transferDevice(options);
+    return withPermissionCheck(
+      () => this.cloudClient.transferDevice(options),
+      this.cloudClient.userClaims,
+      "transferDevice"
+    );
   }
 
   /**
@@ -488,17 +489,11 @@ export class Neurosity {
    * ```
    */
   public onUserDevicesChange(): Observable<DeviceInfo[]> {
-    const [hasOAuthError, OAuthError] =
-      validateScopeBasedPermissionForFunctionName(
-        this.cloudClient.userClaims,
-        "onUserDevicesChange"
-      );
-
-    if (hasOAuthError) {
-      return throwError(() => OAuthError);
-    }
-
-    return this.cloudClient.onUserDevicesChange();
+    return withPermissionCheck(
+      () => this.cloudClient.onUserDevicesChange(),
+      this.cloudClient.userClaims,
+      "onUserDevicesChange"
+    );
   }
 
   /**
@@ -556,17 +551,11 @@ export class Neurosity {
   public async selectDevice(
     deviceSelector: (devices: DeviceInfo[]) => DeviceInfo
   ): Promise<DeviceInfo> {
-    const [hasOAuthError, OAuthError] =
-      validateScopeBasedPermissionForFunctionName(
-        this.cloudClient.userClaims,
-        "selectDevice"
-      );
-
-    if (hasOAuthError) {
-      return Promise.reject(OAuthError);
-    }
-
-    return await this.cloudClient.selectDevice(deviceSelector);
+    return withPermissionCheck(
+      () => this.cloudClient.selectDevice(deviceSelector),
+      this.cloudClient.userClaims,
+      "selectDevice"
+    );
   }
 
   /**
@@ -579,17 +568,11 @@ export class Neurosity {
    */
 
   public async getSelectedDevice(): Promise<DeviceInfo> {
-    const [hasOAuthError, OAuthError] =
-      validateScopeBasedPermissionForFunctionName(
-        this.cloudClient.userClaims,
-        "getSelectedDevice"
-      );
-
-    if (hasOAuthError) {
-      return Promise.reject(OAuthError);
-    }
-
-    return await this.cloudClient.getSelectedDevice();
+    return withPermissionCheck(
+      () => this.cloudClient.getSelectedDevice(),
+      this.cloudClient.userClaims,
+      "getSelectedDevice"
+    );
   }
 
   /**
@@ -602,20 +585,14 @@ export class Neurosity {
       return Promise.reject(errors.mustSelectDevice);
     }
 
-    const [hasOAuthError, OAuthError] =
-      validateScopeBasedPermissionForFunctionName(
-        this.cloudClient.userClaims,
-        "getInfo"
-      );
-
-    if (hasOAuthError) {
-      return Promise.reject(OAuthError);
-    }
-
-    return await this._withStreamingModePromise({
-      wifi: () => this.cloudClient.getInfo(),
-      bluetooth: () => this.bluetoothClient.getInfo()
-    });
+    return withPermissionCheck(
+      () => this._withStreamingModePromise({
+        wifi: () => this.cloudClient.getInfo(),
+        bluetooth: () => this.bluetoothClient.getInfo()
+      }),
+      this.cloudClient.userClaims,
+      "getInfo"
+    );
   }
 
   /**
@@ -628,17 +605,11 @@ export class Neurosity {
    * ```
    */
   public onDeviceChange(): Observable<DeviceInfo> {
-    const [hasOAuthError, OAuthError] =
-      validateScopeBasedPermissionForFunctionName(
-        this.cloudClient.userClaims,
-        "onDeviceChange"
-      );
-
-    if (hasOAuthError) {
-      return throwError(() => OAuthError);
-    }
-
-    return this.cloudClient.onDeviceChange();
+    return withPermissionCheck(
+      () => this.cloudClient.onDeviceChange(),
+      this.cloudClient.userClaims,
+      "onDeviceChange"
+    );
   }
 
   /**
@@ -758,7 +729,7 @@ export class Neurosity {
    *  at P7 and P8. A list of haptic commands can be found on ./utils/hapticCodes.ts - there
    *  are about 127 of them!
    */
-  public async haptics(effects: any): Promise<any> {
+  public async haptics(effects: HapticEffectsRequest): Promise<HapticResponse> {
     const metric = "haptics";
     if (!(await this.cloudClient.didSelectDevice())) {
       return Promise.reject(errors.mustSelectDevice);
@@ -828,41 +799,11 @@ export class Neurosity {
    * @returns Observable of accelerometer metric events
    */
   public accelerometer(): Observable<Accelerometer> {
-    const metric = "accelerometer";
-
-    const [hasOAuthError, OAuthError] =
-      validateScopeBasedPermissionForFunctionName(
-        this.cloudClient.userClaims,
-        metric
-      );
-
-    if (hasOAuthError) {
-      return throwError(() => OAuthError);
-    }
-
-    return this.onDeviceChange().pipe(
-      switchMap((selectedDevice: DeviceInfo | null) => {
-        const modelVersion =
-          selectedDevice?.modelVersion || platform.MODEL_VERSION_1;
-        const supportsAccel = platform.supportsAccel(modelVersion);
-
-        if (!supportsAccel) {
-          return throwError(() =>
-            errors.metricNotSupportedByModel(metric, modelVersion)
-          );
-        }
-
-        return this._withStreamingModeObservable({
-          wifi: () =>
-            getCloudMetric(this._getCloudMetricDependencies(), {
-              metric,
-              labels: getLabels(metric),
-              atomic: true
-            }),
-          bluetooth: () => this.bluetoothClient.accelerometer()
-        });
-      })
-    );
+    return createAccelerometerObservable<Accelerometer>(this, {
+      metric: "accelerometer",
+      labels: getLabels("accelerometer"),
+      atomic: true
+    });
   }
 
   /**
@@ -910,26 +851,11 @@ export class Neurosity {
   public brainwaves(
     label: BrainwavesLabel
   ): Observable<Epoch | PowerByBand | PSD> {
-    const [hasOAuthError, OAuthError] =
-      validateScopeBasedPermissionForFunctionName(
-        this.cloudClient.userClaims,
-        "brainwaves"
-      );
-
-    if (hasOAuthError) {
-      return throwError(() => OAuthError);
-    }
-
-    return this._withStreamingModeObservable({
-      wifi: () =>
-        getCloudMetric(this._getCloudMetricDependencies(), {
-          metric: "brainwaves",
-          labels: label ? [label] : [],
-          atomic: false
-        }),
-      // @TODO: doesn't support multiple labels, we should make the higher
-      // order function only support one label
-      bluetooth: () => this.bluetoothClient.brainwaves(label)
+    return createMetricObservable<Epoch | PowerByBand | PSD>(this, {
+      metric: "brainwaves",
+      labels: label ? [label] : [],
+      atomic: false,
+      bluetoothGetter: () => this.bluetoothClient.brainwaves(label)
     });
   }
 
@@ -1192,24 +1118,12 @@ export class Neurosity {
    * @returns Observable of calm events - awareness/calm alias
    */
   public calm(): Observable<Calm> {
-    const [hasOAuthError, OAuthError] =
-      validateScopeBasedPermissionForFunctionName(
-        this.cloudClient.userClaims,
-        "calm"
-      );
-
-    if (hasOAuthError) {
-      return throwError(() => OAuthError);
-    }
-
-    return this._withStreamingModeObservable({
-      wifi: () =>
-        getCloudMetric(this._getCloudMetricDependencies(), {
-          metric: "awareness",
-          labels: ["calm"],
-          atomic: false
-        }),
-      bluetooth: () => this.bluetoothClient.calm()
+    return createMetricObservable<Calm>(this, {
+      metric: "awareness",
+      labels: ["calm"],
+      atomic: false,
+      scopeName: "calm",
+      bluetoothGetter: () => this.bluetoothClient.calm()
     });
   }
 
@@ -1231,26 +1145,11 @@ export class Neurosity {
    * @returns Observable of signalQuality metric events
    */
   public signalQuality(): Observable<SignalQuality> {
-    const metric = "signalQuality";
-
-    const [hasOAuthError, OAuthError] =
-      validateScopeBasedPermissionForFunctionName(
-        this.cloudClient.userClaims,
-        metric
-      );
-
-    if (hasOAuthError) {
-      return throwError(() => OAuthError);
-    }
-
-    return this._withStreamingModeObservable({
-      wifi: () =>
-        getCloudMetric(this._getCloudMetricDependencies(), {
-          metric,
-          labels: getLabels(metric),
-          atomic: true
-        }),
-      bluetooth: () => this.bluetoothClient.signalQuality()
+    return createMetricObservable<SignalQuality>(this, {
+      metric: "signalQuality",
+      labels: getLabels("signalQuality"),
+      atomic: true,
+      bluetoothGetter: () => this.bluetoothClient.signalQuality()
     });
   }
 
@@ -1272,26 +1171,12 @@ export class Neurosity {
    * @returns Observable of signalQualityV2 metric events
    */
   public signalQualityV2(): Observable<SignalQualityV2> {
-    const metric = "signalQualityV2";
-
-    const [hasOAuthError, OAuthError] =
-      validateScopeBasedPermissionForFunctionName(
-        this.cloudClient.userClaims,
-        "signalQuality" // Reuse same scope
-      );
-
-    if (hasOAuthError) {
-      return throwError(() => OAuthError);
-    }
-
-    return this._withStreamingModeObservable({
-      wifi: () =>
-        getCloudMetric(this._getCloudMetricDependencies(), {
-          metric,
-          labels: getLabels(metric),
-          atomic: true
-        }),
-      bluetooth: () => this.bluetoothClient.signalQualityV2()
+    return createMetricObservable<SignalQualityV2>(this, {
+      metric: "signalQualityV2",
+      labels: getLabels("signalQualityV2"),
+      atomic: true,
+      scopeName: "signalQuality",
+      bluetoothGetter: () => this.bluetoothClient.signalQualityV2()
     });
   }
 
@@ -1312,17 +1197,11 @@ export class Neurosity {
    * @returns Observable of `settings` metric events
    */
   public settings(): Observable<Settings> {
-    const [hasOAuthError, OAuthError] =
-      validateScopeBasedPermissionForFunctionName(
-        this.cloudClient.userClaims,
-        "settings"
-      );
-
-    if (hasOAuthError) {
-      return throwError(() => OAuthError);
-    }
-
-    return this.cloudClient.observeNamespace("settings");
+    return withPermissionCheck(
+      () => this.cloudClient.observeNamespace("settings"),
+      this.cloudClient.userClaims,
+      "settings"
+    );
   }
 
   /**
@@ -1341,17 +1220,11 @@ export class Neurosity {
    * @returns Observable of `osVersion` events. e.g 16.0.0
    */
   public osVersion(): Observable<OSVersion> {
-    const [hasOAuthError, OAuthError] =
-      validateScopeBasedPermissionForFunctionName(
-        this.cloudClient.userClaims,
-        "osVersion"
-      );
-
-    if (hasOAuthError) {
-      return throwError(() => OAuthError);
-    }
-
-    return this.cloudClient.osVersion();
+    return withPermissionCheck(
+      () => this.cloudClient.osVersion(),
+      this.cloudClient.userClaims,
+      "osVersion"
+    );
   }
 
   /**
@@ -1373,24 +1246,12 @@ export class Neurosity {
    * @returns Observable of focus events - awareness/focus alias
    */
   public focus(): Observable<Focus> {
-    const [hasOAuthError, OAuthError] =
-      validateScopeBasedPermissionForFunctionName(
-        this.cloudClient.userClaims,
-        "focus"
-      );
-
-    if (hasOAuthError) {
-      return throwError(() => OAuthError);
-    }
-
-    return this._withStreamingModeObservable({
-      wifi: () =>
-        getCloudMetric(this._getCloudMetricDependencies(), {
-          metric: "awareness",
-          labels: ["focus"],
-          atomic: false
-        }),
-      bluetooth: () => this.bluetoothClient.focus()
+    return createMetricObservable<Focus>(this, {
+      metric: "awareness",
+      labels: ["focus"],
+      atomic: false,
+      scopeName: "focus",
+      bluetoothGetter: () => this.bluetoothClient.focus()
     });
   }
 
@@ -1401,20 +1262,8 @@ export class Neurosity {
    * @returns Observable of kinesis metric events
    */
   public kinesis(label: string): Observable<Kinesis> {
-    const metric = "kinesis";
-
-    const [hasOAuthError, OAuthError] =
-      validateScopeBasedPermissionForFunctionName(
-        this.cloudClient.userClaims,
-        metric
-      );
-
-    if (hasOAuthError) {
-      return throwError(() => OAuthError);
-    }
-
-    return getCloudMetric(this._getCloudMetricDependencies(), {
-      metric,
+    return createMetricObservable<Kinesis>(this, {
+      metric: "kinesis",
       labels: label ? [label] : [],
       atomic: false
     });
@@ -1426,21 +1275,9 @@ export class Neurosity {
    * @param label Name of metric properties to filter by
    * @returns Observable of predictions metric events
    */
-  public predictions(label: string): Observable<any> {
-    const metric = "predictions";
-
-    const [hasOAuthError, OAuthError] =
-      validateScopeBasedPermissionForFunctionName(
-        this.cloudClient.userClaims,
-        metric
-      );
-
-    if (hasOAuthError) {
-      return throwError(() => OAuthError);
-    }
-
-    return getCloudMetric(this._getCloudMetricDependencies(), {
-      metric,
+  public predictions(label: string): Observable<Prediction> {
+    return createMetricObservable<Prediction>(this, {
+      metric: "predictions",
       labels: label ? [label] : [],
       atomic: false
     });
@@ -1463,20 +1300,14 @@ export class Neurosity {
    * @returns Observable of `status` metric events
    */
   public status(): Observable<DeviceStatus> {
-    const [hasOAuthError, OAuthError] =
-      validateScopeBasedPermissionForFunctionName(
-        this.cloudClient.userClaims,
-        "status"
-      );
-
-    if (hasOAuthError) {
-      return throwError(() => OAuthError);
-    }
-
-    return this._withStreamingModeObservable({
-      wifi: () => this.cloudClient.status(),
-      bluetooth: () => this.bluetoothClient.status()
-    }).pipe(distinctUntilChanged((a, b) => isEqual(a, b)));
+    return withPermissionCheck(
+      () => this._withStreamingModeObservable({
+        wifi: () => this.cloudClient.status(),
+        bluetooth: () => this.bluetoothClient.status()
+      }).pipe(distinctUntilChanged((a, b) => isEqual(a, b))),
+      this.cloudClient.userClaims,
+      "status"
+    );
   }
 
   /**
@@ -1500,17 +1331,11 @@ export class Neurosity {
       return Promise.reject(errors.mustSelectDevice);
     }
 
-    const [hasOAuthError, OAuthError] =
-      validateScopeBasedPermissionForFunctionName(
-        this.cloudClient.userClaims,
-        "changeSettings"
-      );
-
-    if (hasOAuthError) {
-      return Promise.reject(OAuthError);
-    }
-
-    return await this.cloudClient.changeSettings(settings);
+    return withPermissionCheck(
+      () => this.cloudClient.changeSettings(settings),
+      this.cloudClient.userClaims,
+      "changeSettings"
+    );
   }
 
   /**
@@ -1656,17 +1481,11 @@ export class Neurosity {
    * @returns custom token
    */
   public createCustomToken(): Promise<CustomToken> {
-    const [hasOAuthError, OAuthError] =
-      validateScopeBasedPermissionForFunctionName(
-        this.cloudClient.userClaims,
-        "createCustomToken"
-      );
-
-    if (hasOAuthError) {
-      return Promise.reject(OAuthError);
-    }
-
-    return this.cloudClient.createCustomToken();
+    return withPermissionCheck(
+      () => this.cloudClient.createCustomToken(),
+      this.cloudClient.userClaims,
+      "createCustomToken"
+    );
   }
 
   /**
@@ -1675,17 +1494,11 @@ export class Neurosity {
    * @returns API key record
    */
   public createApiKey(data: CreateApiKeyRequest): Promise<ApiKeyRecord> {
-    const [hasOAuthError, OAuthError] =
-      validateScopeBasedPermissionForFunctionName(
-        this.cloudClient.userClaims,
-        "createApiKey"
-      );
-
-    if (hasOAuthError) {
-      return Promise.reject(OAuthError);
-    }
-
-    return this.cloudClient.createApiKey(data);
+    return withPermissionCheck(
+      () => this.cloudClient.createApiKey(data),
+      this.cloudClient.userClaims,
+      "createApiKey"
+    );
   }
 
   /**
@@ -1695,17 +1508,11 @@ export class Neurosity {
    * @returns void
    */
   public removeApiKey(apiKeyId: string): Promise<RemoveApiKeyResponse> {
-    const [hasOAuthError, OAuthError] =
-      validateScopeBasedPermissionForFunctionName(
-        this.cloudClient.userClaims,
-        "removeApiKey"
-      );
-
-    if (hasOAuthError) {
-      return Promise.reject(OAuthError);
-    }
-
-    return this.cloudClient.removeApiKey(apiKeyId);
+    return withPermissionCheck(
+      () => this.cloudClient.removeApiKey(apiKeyId),
+      this.cloudClient.userClaims,
+      "removeApiKey"
+    );
   }
 
   /**

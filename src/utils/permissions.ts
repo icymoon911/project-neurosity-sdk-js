@@ -18,6 +18,7 @@ type PermissionBasedClaims = OAuthClaims & ApiKeyClaims;
 const scopeRequiredByAction = {
   "marker/add": "write:brainwave-markers",
   "brainwaves/record": "write:brainwaves",
+  "brainwaves/startRecording": "write:brainwaves",
   "haptics/queue": "write:haptics",
   "training/record": "write:kinesis",
   "training/stop": "write:kinesis",
@@ -65,10 +66,14 @@ export function validateScopeBasedPermissionForAction(
     return [false, null];
   }
 
-  const scopes = scopesString.split(",");
-
   const { command, action: actionName } = action;
   const requiredScope = scopeRequiredByAction[`${command}/${actionName}`];
+
+  if (typeof scopesString !== "string" || scopesString.length === 0) {
+    return [true, getScopeError(requiredScope || "unknown")];
+  }
+
+  const scopes = scopesString.split(",");
   const hasRequireScopes = scopes.includes(requiredScope);
 
   if (hasRequireScopes) {
@@ -88,9 +93,13 @@ export function validateScopeBasedPermissionForFunctionName(
     return [false, null];
   }
 
-  const scopes = scopesString.split(",");
-
   const requiredScope = scopeRequiredByFunctionName[functionName];
+
+  if (typeof scopesString !== "string" || scopesString.length === 0) {
+    return [true, getScopeError(requiredScope || "unknown")];
+  }
+
+  const scopes = scopesString.split(",");
   const hasRequireScopes = scopes.includes(requiredScope);
 
   if (hasRequireScopes) {

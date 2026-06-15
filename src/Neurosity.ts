@@ -55,6 +55,7 @@ const defaultOptions = {
   timesync: false,
   autoSelectDevice: true,
   streamingMode: STREAMING_MODE.WIFI_ONLY,
+  loginTimeout: 5000,
   emulator: false,
   emulatorHost: "localhost",
   emulatorAuthPort: 9099,
@@ -1413,10 +1414,14 @@ export class Neurosity {
       return throwError(() => OAuthError);
     }
 
-    return getCloudMetric(this._getCloudMetricDependencies(), {
-      metric,
-      labels: label ? [label] : [],
-      atomic: false
+    return this._withStreamingModeObservable({
+      wifi: () =>
+        getCloudMetric(this._getCloudMetricDependencies(), {
+          metric,
+          labels: label ? [label] : [],
+          atomic: false
+        }),
+      bluetooth: () => throwError(() => errors.wifiOnlyMetric(metric))
     });
   }
 
@@ -1439,10 +1444,14 @@ export class Neurosity {
       return throwError(() => OAuthError);
     }
 
-    return getCloudMetric(this._getCloudMetricDependencies(), {
-      metric,
-      labels: label ? [label] : [],
-      atomic: false
+    return this._withStreamingModeObservable({
+      wifi: () =>
+        getCloudMetric(this._getCloudMetricDependencies(), {
+          metric,
+          labels: label ? [label] : [],
+          atomic: false
+        }),
+      bluetooth: () => throwError(() => errors.wifiOnlyMetric(metric))
     });
   }
 

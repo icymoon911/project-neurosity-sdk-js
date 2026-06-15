@@ -21,3 +21,11 @@ export const locationNotFound = (location: string, modelVersion: string) => {
 export const exceededMaxItems = (maxItems: number) => {
   return new Error(`${prefix}Maximum items in array is ${maxItems}`);
 };
+
+export const wifiOnlyMetric = (metric: string) => {
+  return new Error(
+    `${prefix}"${metric}" is only supported in WiFi streaming mode. ` +
+      `Please switch to a WiFi-based streaming mode (e.g. STREAMING_MODE.WIFI_ONLY) ` +
+      `or ensure your device is online to use this feature.`
+  );
+};

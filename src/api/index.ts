@@ -1,6 +1,6 @@
-import { Observable, ReplaySubject, EMPTY, timer } from "rxjs";
+import { Observable, ReplaySubject, EMPTY, timer, race } from "rxjs";
 import { fromEventPattern, firstValueFrom } from "rxjs";
-import { filter, shareReplay, switchMap, map, takeUntil } from "rxjs/operators";
+import { filter, shareReplay, switchMap, map, takeUntil, take, tap } from "rxjs/operators";
 
 import { FirebaseApp, FirebaseUser, FirebaseDevice } from "./firebase";
 import { UserWithMetadata } from "./firebase";
@@ -8,6 +8,7 @@ import { Timesync } from "../timesync";
 import { SubscriptionManager } from "../subscriptions/SubscriptionManager";
 import { heartbeatAwareStatus } from "../utils/heartbeat";
 import { filterInternalKeys } from "../utils/filterInternalKeys";
+import * as errors from "../utils/errors";
 import { Client } from "../types/client";
 import { Action, Actions } from "../types/actions";
 import { Metrics } from "../types/metrics";
@@ -183,18 +184,53 @@ export class CloudClient implements Client {
     const auth = await this.firebaseUser.login(credentials);
     const selectedDevice = await this.setAutoSelectedDevice();
 
+    const loginTimeout = this.options.loginTimeout ?? 5000;
+
     // We need guarantee that user claims are ready before finishing the
-    // login process as permission-based validation is dependent on the user claims
-    const userClaimsReady = await firstValueFrom(
-      this.firebaseUser.onUserClaimsChange().pipe(
-        filter((userClaims) => !!userClaims),
-        map((userClaims) => !!userClaims),
-        takeUntil(timer(1000))
+    // login process as permission-based validation is dependent on the user claims.
+    // Track whether ANY emission was received (even null/undefined) so we can
+    // distinguish between "timeout" (no emission at all, likely slow network)
+    // and "empty" (claims emitted but falsy, likely misconfigured account).
+    let receivedAnyEmission = false;
+
+    const result = await firstValueFrom(
+      race(
+        this.firebaseUser.onUserClaimsChange().pipe(
+          tap(() => {
+            receivedAnyEmission = true;
+          }),
+          filter((userClaims) => !!userClaims),
+          take(1),
+          map(() => "ready" as const)
+        ),
+        timer(loginTimeout).pipe(
+          map(() =>
+            receivedAnyEmission ? ("empty" as const) : ("timeout" as const)
+          )
+        )
       )
     );
 
-    if (!userClaimsReady) {
-      return Promise.reject(`Failed to get user claims.`);
+    if (result === "timeout") {
+      return Promise.reject(
+        new Error(
+          `${errors.prefix}Timed out waiting for user claims after ${loginTimeout}ms. ` +
+            `This may be caused by a slow network connection. ` +
+            `You can increase the timeout by passing a higher "loginTimeout" value ` +
+            `in the SDK options (e.g. new Neurosity({ loginTimeout: 10000 })).`
+        )
+      );
+    }
+
+    if (result === "empty") {
+      return Promise.reject(
+        new Error(
+          `${errors.prefix}User claims could not be loaded. ` +
+            `The claims for this account may be empty or unavailable. ` +
+            `Make sure you have logged in with valid credentials and that ` +
+            `the account has been properly set up.`
+        )
+      );
     }
 
     return {

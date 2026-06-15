@@ -8,6 +8,13 @@ import { binaryBufferToEpoch } from "./utils/binaryBufferToEpoch";
 import { DeviceInfo } from "../../types/deviceInfo";
 import { Action } from "../../types/actions";
 import { Epoch } from "../../types/epoch";
+import { Focus } from "../../types/focus";
+import { Calm } from "../../types/calm";
+import { Accelerometer } from "../../types/accelerometer";
+import { SignalQuality } from "../../types/signalQuality";
+import { SignalQualityV2 } from "../../types/signalQualityV2";
+import { DeviceStatus } from "../../types/status";
+import { Settings } from "../../types/settings";
 import { BLUETOOTH_CONNECTION } from "./types";
 import { DeviceNicknameOrPeripheral } from "./BluetoothTransport";
 import { Peripheral } from "./react-native/types/BleManagerTypes";
@@ -34,17 +41,17 @@ export class BluetoothClient {
   osHasBluetoothSupport$ = new ReplaySubject<boolean>(1);
   isAuthenticated$ = new ReplaySubject<IsAuthenticated>(1);
 
-  _focus$: Observable<any>;
-  _calm$: Observable<any>;
-  _accelerometer$: Observable<any>;
+  _focus$: Observable<Focus>;
+  _calm$: Observable<Calm>;
+  _accelerometer$: Observable<Accelerometer>;
   _brainwavesRaw$: Observable<any>;
   _brainwavesRawUnfiltered$: Observable<any>;
   _brainwavesPSD$: Observable<any>;
   _brainwavesPowerByBand$: Observable<any>;
-  _signalQuality$: Observable<any>;
-  _signalQualityV2$: Observable<any>;
-  _status$: Observable<any>;
-  _settings$: Observable<any>;
+  _signalQuality$: Observable<SignalQuality>;
+  _signalQualityV2$: Observable<SignalQualityV2>;
+  _status$: Observable<DeviceStatus>;
+  _settings$: Observable<Settings>;
   _wifiNearbyNetworks$: Observable<any>;
   _wifiConnections$: Observable<any>;
 
@@ -296,15 +303,15 @@ export class BluetoothClient {
     );
   }
 
-  focus() {
+  focus(): Observable<Focus> {
     return this._focus$;
   }
 
-  calm() {
+  calm(): Observable<Calm> {
     return this._calm$;
   }
 
-  accelerometer() {
+  accelerometer(): Observable<Accelerometer> {
     return this._accelerometer$;
   }
 
@@ -333,11 +340,11 @@ export class BluetoothClient {
     }
   }
 
-  signalQuality() {
+  signalQuality(): Observable<SignalQuality> {
     return this._signalQuality$;
   }
 
-  signalQualityV2() {
+  signalQualityV2(): Observable<SignalQualityV2> {
     return this._signalQualityV2$;
   }
 
@@ -362,7 +369,7 @@ export class BluetoothClient {
     );
   }
 
-  status() {
+  status(): Observable<DeviceStatus> {
     return this._status$;
   }
 
@@ -375,7 +382,7 @@ export class BluetoothClient {
     );
   }
 
-  settings() {
+  settings(): Observable<Settings> {
     return this._settings$;
   }
 

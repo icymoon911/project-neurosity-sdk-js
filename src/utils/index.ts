@@ -11,3 +11,4 @@ export * as platform from "./platform";
 export * from "./subscription";
 export * from "./transferDevice";
 export * from "./whileOnline";
+export * from "./withPermissionCheck";

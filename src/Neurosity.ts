@@ -11,18 +11,13 @@ import { Training } from "./types/training";
 import { Credentials, EmailAndPassword } from "./types/credentials";
 import { CustomToken } from "./types/credentials";
 import { Settings } from "./types/settings";
-import { SignalQuality } from "./types/signalQuality";
-import { SignalQualityV2 } from "./types/signalQualityV2";
 import { Kinesis } from "./types/kinesis";
-import { Calm } from "./types/calm";
-import { Focus } from "./types/focus";
-import { getLabels } from "./utils/subscription";
-import { BrainwavesLabel, Epoch, PowerByBand, PSD } from "./types/brainwaves";
-import { Accelerometer } from "./types/accelerometer";
+import { Prediction } from "./types/predictions";
 import { DeviceInfo, OSVersion } from "./types/deviceInfo";
 import { DeviceStatus, STATUS } from "./types/status";
 import { Action } from "./types/actions";
 import { HapticEffects } from "./types/hapticEffects";
+import { HapticEffectsRequest, HapticEffectsResponse } from "./types/haptics";
 import {
   RecordingOptions,
   RecordingResult,
@@ -50,6 +45,10 @@ import {
   CreateApiKeyRequest,
   RemoveApiKeyResponse
 } from "./types/apiKey";
+import {
+  NeurosityMetricsMixin,
+  applyMetricsMixin
+} from "./metrics/MetricsModule";
 
 const defaultOptions = {
   timesync: false,
@@ -63,6 +62,13 @@ const defaultOptions = {
   emulatorFirestorePort: 8080,
   emulatorOptions: {}
 };
+
+/**
+ * Interface merge: metric methods are added to Neurosity by the
+ * {@link applyMetricsMixin} mixin. This declaration tells TypeScript
+ * about them so the public API stays fully typed.
+ */
+export interface Neurosity extends NeurosityMetricsMixin {}
 
 /**
  * import StreamingModes from "@site/src/components/StreamingModes";
@@ -758,7 +764,9 @@ export class Neurosity {
    *  at P7 and P8. A list of haptic commands can be found on ./utils/hapticCodes.ts - there
    *  are about 127 of them!
    */
-  public async haptics(effects: any): Promise<any> {
+  public async haptics(
+    effects: HapticEffectsRequest
+  ): Promise<HapticEffectsResponse> {
     const metric = "haptics";
     if (!(await this.cloudClient.didSelectDevice())) {
       return Promise.reject(errors.mustSelectDevice);
@@ -809,128 +817,6 @@ export class Neurosity {
    */
   public getHapticEffects(): HapticEffects {
     return hapticEffects;
-  }
-
-  /**
-   * <StreamingModes wifi={true} bluetooth={true} />
-   *
-   * Observes accelerometer data
-   * Supported by the Crown and Notion 2 devices.
-   *
-   * ```typescript
-   * neurosity.accelerometer().subscribe(accelerometer => {
-   *   console.log(accelerometer);
-   * });
-   *
-   * // { acceleration: ..., inclination: ..., orientation: ..., pitch: ..., roll: ..., x: ..., y: ..., z: ... }
-   * ```
-   *
-   * @returns Observable of accelerometer metric events
-   */
-  public accelerometer(): Observable<Accelerometer> {
-    const metric = "accelerometer";
-
-    const [hasOAuthError, OAuthError] =
-      validateScopeBasedPermissionForFunctionName(
-        this.cloudClient.userClaims,
-        metric
-      );
-
-    if (hasOAuthError) {
-      return throwError(() => OAuthError);
-    }
-
-    return this.onDeviceChange().pipe(
-      switchMap((selectedDevice: DeviceInfo | null) => {
-        const modelVersion =
-          selectedDevice?.modelVersion || platform.MODEL_VERSION_1;
-        const supportsAccel = platform.supportsAccel(modelVersion);
-
-        if (!supportsAccel) {
-          return throwError(() =>
-            errors.metricNotSupportedByModel(metric, modelVersion)
-          );
-        }
-
-        return this._withStreamingModeObservable({
-          wifi: () =>
-            getCloudMetric(this._getCloudMetricDependencies(), {
-              metric,
-              labels: getLabels(metric),
-              atomic: true
-            }),
-          bluetooth: () => this.bluetoothClient.accelerometer()
-        });
-      })
-    );
-  }
-
-  /**
-   * <StreamingModes wifi={true} bluetooth={true} />
-   * 
-   * The `raw` brainwaves parameter emits epochs of 16 samples for Crown and 25 for Notion 1 and 2.
-   *
-   * Example
-   * ```typescript
-   * neurosity.brainwaves("raw").subscribe(brainwaves => {
-   *   console.log(brainwaves);
-   * });
-   * ```
-   *
-   * Raw Unfiltered - The `rawUnfiltered` brainwaves parameter emits epochs of 16 samples for Crown and 25 for Notion 1 and 2. 
-
-   * Example
-   * ```typescript
-   * neurosity.brainwaves("rawUnfiltered").subscribe(brainwaves => {
-   *   console.log(brainwaves);
-   * });
-   * ```
-   *
-   * Power By Band - The `powerByBand` brainwaves parameter emits epochs 4 times a second. Every frequency label (e.g. beta) contains an average power value per channel.
-   * 
-   * Example
-   * ```typescript
-   * neurosity.brainwaves("powerByBand").subscribe(brainwaves => {
-   *   console.log(brainwaves);
-   * });
-   * ```
-   *
-   * Power Spectral Density (PSD) - The `psd` brainwaves parameter emits epochs 4 times a second. Every frequency label (e.g. alpha) contains the computed FFT (Fast Fourier transform) value per channel (see the `psd` property), as well as the frequency ranges (see the `freqs` property).
-   * 
-   * Example
-   * ```typescript
-   * neurosity.brainwaves("psd").subscribe(brainwaves => {
-   *   console.log(brainwaves);
-   * });
-   * ```
-   *
-   * @param label Name of metric properties to filter by
-   * @returns Observable of brainwaves metric events
-   */
-  public brainwaves(
-    label: BrainwavesLabel
-  ): Observable<Epoch | PowerByBand | PSD> {
-    const [hasOAuthError, OAuthError] =
-      validateScopeBasedPermissionForFunctionName(
-        this.cloudClient.userClaims,
-        "brainwaves"
-      );
-
-    if (hasOAuthError) {
-      return throwError(() => OAuthError);
-    }
-
-    return this._withStreamingModeObservable({
-      wifi: () =>
-        getCloudMetric(this._getCloudMetricDependencies(), {
-          metric: "brainwaves",
-          labels: label ? [label] : [],
-          atomic: false
-        }),
-      // @TODO: doesn't support multiple labels, we should make the higher
-      // order function only support one label
-      bluetooth: () => this.bluetoothClient.brainwaves(label)
-    });
   }
 
   /**
@@ -1174,128 +1060,6 @@ export class Neurosity {
   }
 
   /**
-   * <StreamingModes wifi={true} bluetooth={true} />
-   *
-   * Example
-   * ```typescript
-   * neurosity.calm().subscribe(calm => {
-   *   console.log(calm.probability);
-   * });
-   *
-   * // 0.45
-   * // 0.47
-   * // 0.53
-   * // 0.51
-   * // ...
-   * ```
-   *
-   * @returns Observable of calm events - awareness/calm alias
-   */
-  public calm(): Observable<Calm> {
-    const [hasOAuthError, OAuthError] =
-      validateScopeBasedPermissionForFunctionName(
-        this.cloudClient.userClaims,
-        "calm"
-      );
-
-    if (hasOAuthError) {
-      return throwError(() => OAuthError);
-    }
-
-    return this._withStreamingModeObservable({
-      wifi: () =>
-        getCloudMetric(this._getCloudMetricDependencies(), {
-          metric: "awareness",
-          labels: ["calm"],
-          atomic: false
-        }),
-      bluetooth: () => this.bluetoothClient.calm()
-    });
-  }
-
-  /**
-   * <StreamingModes wifi={true} bluetooth={true} />
-   *
-   * Observes signal quality data where each property is the name
-   * of the channel and the value includes the standard deviation and
-   * a status set by the device
-   *
-   * ```typescript
-   * neurosity.signalQuality().subscribe(signalQuality => {
-   *   console.log(signalQuality);
-   * });
-   *
-   * // { FC6: { standardDeviation: 3.5, status: "good" }, C3: {...}, ... }
-   * ```
-   *
-   * @returns Observable of signalQuality metric events
-   */
-  public signalQuality(): Observable<SignalQuality> {
-    const metric = "signalQuality";
-
-    const [hasOAuthError, OAuthError] =
-      validateScopeBasedPermissionForFunctionName(
-        this.cloudClient.userClaims,
-        metric
-      );
-
-    if (hasOAuthError) {
-      return throwError(() => OAuthError);
-    }
-
-    return this._withStreamingModeObservable({
-      wifi: () =>
-        getCloudMetric(this._getCloudMetricDependencies(), {
-          metric,
-          labels: getLabels(metric),
-          atomic: true
-        }),
-      bluetooth: () => this.bluetoothClient.signalQuality()
-    });
-  }
-
-  /**
-   * <StreamingModes wifi={true} bluetooth={true} />
-   *
-   * Observes signal quality with normalized scores (0-1) per channel
-   * and an overall score.
-   *
-   * ```typescript
-   * neurosity.signalQualityV2().subscribe(quality => {
-   *   console.log(quality.overall.score);  // 0-1
-   *   console.log(quality.byChannel.CP3.score);  // 0-1
-   * });
-   *
-   * // { timestamp: 1234567890, overall: { score: 0.85 }, byChannel: { CP3: { score: 0.9 }, ... } }
-   * ```
-   *
-   * @returns Observable of signalQualityV2 metric events
-   */
-  public signalQualityV2(): Observable<SignalQualityV2> {
-    const metric = "signalQualityV2";
-
-    const [hasOAuthError, OAuthError] =
-      validateScopeBasedPermissionForFunctionName(
-        this.cloudClient.userClaims,
-        "signalQuality" // Reuse same scope
-      );
-
-    if (hasOAuthError) {
-      return throwError(() => OAuthError);
-    }
-
-    return this._withStreamingModeObservable({
-      wifi: () =>
-        getCloudMetric(this._getCloudMetricDependencies(), {
-          metric,
-          labels: getLabels(metric),
-          atomic: true
-        }),
-      bluetooth: () => this.bluetoothClient.signalQualityV2()
-    });
-  }
-
-  /**
    * <StreamingModes wifi={true} />
    *
    * Observes last state of `settings` and all subsequent `settings` changes
@@ -1355,46 +1119,6 @@ export class Neurosity {
   }
 
   /**
-   * <StreamingModes wifi={true} bluetooth={true} />
-   *
-   * Example
-   * ```typescript
-   * neurosity.focus().subscribe(focus => {
-   *   console.log(focus.probability);
-   * });
-   *
-   * // 0.56
-   * // 0.46
-   * // 0.31
-   * // 0.39
-   * // ...
-   * ```
-   *
-   * @returns Observable of focus events - awareness/focus alias
-   */
-  public focus(): Observable<Focus> {
-    const [hasOAuthError, OAuthError] =
-      validateScopeBasedPermissionForFunctionName(
-        this.cloudClient.userClaims,
-        "focus"
-      );
-
-    if (hasOAuthError) {
-      return throwError(() => OAuthError);
-    }
-
-    return this._withStreamingModeObservable({
-      wifi: () =>
-        getCloudMetric(this._getCloudMetricDependencies(), {
-          metric: "awareness",
-          labels: ["focus"],
-          atomic: false
-        }),
-      bluetooth: () => this.bluetoothClient.focus()
-    });
-  }
-
-  /**
    * <StreamingModes wifi={true} />
    *
    * @param label Name of metric properties to filter by
@@ -1426,7 +1150,7 @@ export class Neurosity {
    * @param label Name of metric properties to filter by
    * @returns Observable of predictions metric events
    */
-  public predictions(label: string): Observable<any> {
+  public predictions(label: string): Observable<Prediction> {
     const metric = "predictions";
 
     const [hasOAuthError, OAuthError] =
@@ -1893,3 +1617,7 @@ export class Neurosity {
     return this.cloudClient.deleteUserExperiment(experimentId);
   }
 }
+
+// Apply the metrics mixin – attaches calm(), focus(), brainwaves(),
+// signalQuality(), signalQualityV2(), accelerometer() to the prototype.
+applyMetricsMixin(Neurosity);
